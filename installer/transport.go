@@ -9,7 +9,6 @@ import (
 	"net/http/httputil"
 	"os"
 	"time"
-	"net/url"
 )
 
 const (
