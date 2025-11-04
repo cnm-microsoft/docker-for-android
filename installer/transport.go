@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"os"
 	"time"
+	"net/url"
 )
 
 const (
@@ -18,14 +19,62 @@ const (
 func CreateTimeoutTransport(timeout time.Duration) *http.Transport {
 	certPool := RootCAsGlobal()
 	cfg := &tls.Config{RootCAs: certPool}
+	
+	// 配置自定义DNS解析器，避免Android DNS问题
+	dialer := &net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: 30 * time.Second,
+		Resolver: &net.Resolver{
+			PreferGo: true, // 使用Go内置的DNS解析器
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				// 强制使用IPv4进行DNS查询
+				if network == "tcp" || network == "udp" {
+					network = network + "4"
+				}
+				// 使用公共DNS服务器作为备选
+				d := net.Dialer{
+					Timeout: timeout,
+				}
+				// 尝试多个DNS服务器
+				dnsServers := []string{
+					"8.8.8.8:53",    // Google DNS
+					"8.8.4.4:53",    // Google DNS备用
+					"1.1.1.1:53",    // Cloudflare DNS
+					"114.114.114.114:53", // 114 DNS
+				}
+				
+				var lastErr error
+				for _, dnsServer := range dnsServers {
+					conn, err := d.DialContext(ctx, network, dnsServer)
+					if err == nil {
+						return conn, nil
+					}
+					lastErr = err
+				}
+				return nil, fmt.Errorf("所有DNS服务器均失败: %v", lastErr)
+			},
+		},
+	}
+	
 	return &http.Transport{
 		TLSClientConfig: cfg,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// 强制使用IPv4，避免Android IPv6 DNS问题
+			if network == "tcp" {
+				network = "tcp4"
+			}
+			return dialer.DialContext(ctx, network, addr)
+		},
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, _, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, err
 			}
-			tconn, err := net.DialTimeout(network, addr, timeout)
+			// 强制使用IPv4，避免Android IPv6 DNS问题
+			if network == "tcp" {
+				network = "tcp4"
+			}
+			tconn, err := dialer.DialContext(ctx, network, addr)
 			if err != nil {
 				return nil, err
 			}
@@ -34,6 +83,9 @@ func CreateTimeoutTransport(timeout time.Duration) *http.Transport {
 				RootCAs:    certPool,
 			}), timeout), nil
 		},
+		ForceAttemptHTTP2: true,
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
 	}
 }
 

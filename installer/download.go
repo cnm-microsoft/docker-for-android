@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -29,6 +30,31 @@ func CreateHTTPClient() *http.Client {
 
 // downloadFile 下载文件并验证 SHA256
 func downloadFile(client *http.Client, destPath, filename, expectedSHA256 string) error {
+	// 首先检查本地文件是否存在且有效
+	localPath := filepath.Join(localInstallDir, filename)
+	if fileExists(localPath) {
+		fmt.Printf("   尝试使用本地文件: %s\n", localPath)
+		
+		// 复制本地文件到目标位置
+		if err := copyFile(localPath, destPath); err != nil {
+			fmt.Printf("   ✗ 本地文件复制失败: %v\n", err)
+		} else {
+			// 验证 SHA256
+			if expectedSHA256 != "" {
+				if err := verifySHA256(destPath, expectedSHA256); err != nil {
+					fmt.Printf("   ✗ 本地文件 SHA256 验证失败: %v\n", err)
+					os.Remove(destPath)
+				} else {
+					fmt.Printf("   ✓ 本地文件 SHA256 验证通过\n")
+					return nil
+				}
+			} else {
+				fmt.Printf("   ✓ 使用本地文件成功\n")
+				return nil
+			}
+		}
+	}
+
 	urls := []string{
 		fmt.Sprintf("%s/%s", cdnURL, filename),
 		fmt.Sprintf("%s/%s", serverURL, filename),
